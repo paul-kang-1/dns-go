@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
 	"log"
 	"net"
 )
@@ -22,4 +24,20 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	b := make([]byte, 1024)
+	_, err = conn.Read(b)
+	reader := bytes.NewReader(b[12:])
+	var header DNSHeader
+	if err := header.FromBytes(reader); err != nil {
+		log.Fatal(err)
+	}
+	var question DNSQuestion
+	if err := question.FromBytes(reader); err != nil {
+		log.Fatal(err)
+	}
+	var record DNSRecord
+	if err := record.FromBytes(reader); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Print(record.TTL)
 }
