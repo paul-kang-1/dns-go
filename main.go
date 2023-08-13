@@ -2,14 +2,24 @@ package main
 
 import (
 	"log"
-	"fmt"
+	"net"
 )
 
 func main() {
-	url := "ad.com"
-	res, err := EncodeDomainName(url)
+	var err error
+	query, err := NewQuery("www.example.com", TYPE_A)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(res)
+	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{
+		IP: net.ParseIP("8.8.8.8"),
+		Port: 53,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	_, err = conn.Write(query)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
