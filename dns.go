@@ -3,13 +3,21 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
+	"log"
+	"net"
 
 	"math/rand"
 	"strings"
 )
 
 type (
+	DNS[P any] interface {
+		FromBytes(reader *bytes.Reader) error
+		*P
+	}
+
 	DNSHeader struct {
 		Id                                                       uint16
 		Flags                                                    uint16
@@ -31,22 +39,19 @@ type (
 
 	DNSPacket struct {
 		Header      *DNSHeader
-		Questions   []*DNSQuestion
-		Answers     []*DNSRecord
-		Authorities []*DNSRecord
-		Additionals []*DNSRecord
+		Questions   *[]DNSQuestion
+		Answers     *[]DNSRecord
+		Authorities *[]DNSRecord
+		Additionals *[]DNSRecord
 	}
 )
 
 const (
-	// Header options
-	RECURSION_DESIRED = uint16(1 << 8)
+	RecursionDesired = uint16(1 << 8)
 
-	// Record types
-	TYPE_A = 1
+	TypeA = 1
 
-	// Classes
-	CLASS_IN = 1
+	ClassIn = 1
 )
 
 func (dh *DNSHeader) Bytes() []byte {
@@ -102,6 +107,46 @@ func (dq *DNSQuestion) FromBytes(reader *bytes.Reader) error {
 		return err
 	}
 	return nil
+}
+
+func (dp *DNSPacket) FromBytes(reader *bytes.Reader) error {
+	var header DNSHeader
+	if err := header.FromBytes(reader); err != nil {
+		return err
+	}
+	dp.Header = &header
+	questions, err := parseSlice[DNSQuestion](int(header.NumQuestions), reader)
+	if err != nil {
+		return err
+	}
+	dp.Questions = &questions
+	answers, err := parseSlice[DNSRecord](int(header.NumAnswers), reader)
+	if err != nil {
+		return err
+	}
+	dp.Answers = &answers
+	authorities, err := parseSlice[DNSRecord](int(header.NumAuthorities), reader)
+	if err != nil {
+		return err
+	}
+	dp.Authorities = &authorities
+	additionals, err := parseSlice[DNSRecord](int(header.NumAdditionals), reader)
+	if err != nil {
+		return err
+	}
+	dp.Additionals = &additionals
+	return nil
+}
+
+func parseSlice[T any, PT DNS[T]](size int, reader *bytes.Reader) ([]T, error) {
+	slice := make([]T, size)
+	for i := 0; i < size; i++ {
+		p := PT(&slice[i])
+		if err := p.FromBytes(reader); err != nil {
+			return nil, err
+		}
+	}
+	return slice, nil
 }
 
 // FromBytes creates a DNSRecord from the given sequence of bytes.
@@ -227,16 +272,48 @@ func NewQuery(domainName string, recordType uint16) ([]byte, error) {
 	id := rand.Intn(2<<15 - 1)
 	header := DNSHeader{
 		Id:           uint16(id),
-		Flags:        RECURSION_DESIRED,
+		Flags:        RecursionDesired,
 		NumQuestions: 1,
 	}
 	question := DNSQuestion{
 		Name:  name,
 		Type:  recordType,
-		Class: CLASS_IN,
+		Class: ClassIn,
 	}
 	var payload bytes.Buffer
 	payload.Write(header.Bytes())
 	payload.Write(question.Bytes())
 	return payload.Bytes(), nil
+}
+
+func Lookup(domainName string) (string, error) {
+	query, err := NewQuery(domainName, TypeA)
+	if err != nil {
+		return "", err
+	}
+	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{
+		IP: net.ParseIP("8.8.8.8"),
+		Port: 53,
+	})
+	if err != nil {
+		return "", err
+	}
+	if _, err := conn.Write(query); err != nil {
+		return "", err
+	}
+	b := make([]byte, 1024)
+	if _, err := conn.Read(b); err != nil {
+		return "", err
+	}
+	reader := bytes.NewReader(b)
+	var packet DNSPacket
+	if err := packet.FromBytes(reader); err != nil {
+		log.Fatal(err)
+	}
+	data := (*packet.Answers)[0].Data
+	ip := make([]string, len(data))
+	for i, b := range data {
+		ip[i] = fmt.Sprint(int(b))
+	}
+	return strings.Join(ip, "."), nil
 }

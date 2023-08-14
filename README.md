@@ -1,2 +1,2 @@
-# Minimal DNS Server in Go
+# Minimal DNS Lookup Utility in Go
 
