@@ -16,9 +16,10 @@ func main() {
 		log.Fatal(err)
 	}
 	domain := strings.TrimSpace(text)
-	ip, err := Lookup(domain)
+	packet, err := SendQuery("8.8.8.8", domain, TypeA)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(ip)
+	answers := *packet.Answers
+	fmt.Println(answers[0].Data)
 }

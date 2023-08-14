@@ -3,9 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"io"
-	"log"
 	"net"
 
 	"math/rand"
@@ -50,6 +48,7 @@ const (
 	RecursionDesired = uint16(1 << 8)
 
 	TypeA = 1
+	TypeNS = 2
 
 	ClassIn = 1
 )
@@ -66,24 +65,16 @@ func (dh *DNSHeader) Bytes() []byte {
 }
 
 func (dh *DNSHeader) FromBytes(reader *bytes.Reader) error {
-	if err := binary.Read(reader, binary.BigEndian, &dh.Id); err != nil {
+	data := make([]byte, 12)
+	if _, err := io.ReadFull(reader, data); err != nil {
 		return err
 	}
-	if err := binary.Read(reader, binary.BigEndian, &dh.Flags); err != nil {
-		return err
-	}
-	if err := binary.Read(reader, binary.BigEndian, &dh.NumQuestions); err != nil {
-		return err
-	}
-	if err := binary.Read(reader, binary.BigEndian, &dh.NumAnswers); err != nil {
-		return err
-	}
-	if err := binary.Read(reader, binary.BigEndian, &dh.NumAuthorities); err != nil {
-		return err
-	}
-	if err := binary.Read(reader, binary.BigEndian, &dh.NumAdditionals); err != nil {
-		return err
-	}
+	dh.Id = binary.BigEndian.Uint16(data)
+	dh.Flags = binary.BigEndian.Uint16(data[2:])
+	dh.NumQuestions = binary.BigEndian.Uint16(data[4:])
+	dh.NumAnswers = binary.BigEndian.Uint16(data[6:])
+	dh.NumAuthorities = binary.BigEndian.Uint16(data[8:])
+	dh.NumAdditionals = binary.BigEndian.Uint16(data[10:])
 	return nil
 }
 
@@ -100,12 +91,12 @@ func (dq *DNSQuestion) FromBytes(reader *bytes.Reader) error {
 		return err
 	}
 	dq.Name = []byte(name)
-	if err := binary.Read(reader, binary.BigEndian, &dq.Type); err != nil {
+	data := make([]byte, 4)
+	if _, err := io.ReadFull(reader, data); err != nil {
 		return err
 	}
-	if err := binary.Read(reader, binary.BigEndian, &dq.Class); err != nil {
-		return err
-	}
+	dq.Type = binary.BigEndian.Uint16(data)
+	dq.Class = binary.BigEndian.Uint16(data[2:])
 	return nil
 }
 
@@ -152,24 +143,22 @@ func parseSlice[T any, PT DNS[T]](size int, reader *bytes.Reader) ([]T, error) {
 // FromBytes creates a DNSRecord from the given sequence of bytes.
 // Refer to Section 4.1.3 (Resource Record Format) of RFC 1035.
 func (dr *DNSRecord) FromBytes(reader *bytes.Reader) error {
+	// Set name attribute of variable length
 	name, err := DecodeDomainName(reader)
 	if err != nil {
 		return err
 	}
 	dr.Name = []byte(name)
-	if err := binary.Read(reader, binary.BigEndian, &dr.Type); err != nil {
+	// Set other attributes
+	data := make([]byte, 10)
+	if _, err := io.ReadFull(reader, data); err != nil {
 		return err
 	}
-	if err := binary.Read(reader, binary.BigEndian, &dr.Class); err != nil {
-		return err
-	}
-	if err := binary.Read(reader, binary.BigEndian, &dr.TTL); err != nil {
-		return err
-	}
-	var readLen uint16
-	if err := binary.Read(reader, binary.BigEndian, &readLen); err != nil {
-		return err
-	}
+	dr.Type = binary.BigEndian.Uint16(data)
+	dr.Class = binary.BigEndian.Uint16(data[2:])
+	dr.TTL = binary.BigEndian.Uint32(data[4:])
+	// rdlength and data field
+	readLen := binary.BigEndian.Uint16(data[8:])
 	dr.Data = make([]byte, readLen)
 	if _, err := io.ReadFull(reader, dr.Data); err != nil {
 		return err
@@ -272,7 +261,7 @@ func NewQuery(domainName string, recordType uint16) ([]byte, error) {
 	id := rand.Intn(2<<15 - 1)
 	header := DNSHeader{
 		Id:           uint16(id),
-		Flags:        RecursionDesired,
+		Flags:        0,
 		NumQuestions: 1,
 	}
 	question := DNSQuestion{
@@ -286,34 +275,32 @@ func NewQuery(domainName string, recordType uint16) ([]byte, error) {
 	return payload.Bytes(), nil
 }
 
-func Lookup(domainName string) (string, error) {
-	query, err := NewQuery(domainName, TypeA)
+func SendQuery(ipAddr string, domainName string, recordType int) (*DNSPacket, error) {
+	query, err := NewQuery(domainName, uint16(recordType))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{
-		IP: net.ParseIP("8.8.8.8"),
+		IP: net.ParseIP(ipAddr),
 		Port: 53,
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if _, err := conn.Write(query); err != nil {
-		return "", err
+	defer conn.Close()
+	if _, err = conn.Write(query); err != nil {
+		return nil, err
 	}
+
 	b := make([]byte, 1024)
-	if _, err := conn.Read(b); err != nil {
-		return "", err
+	if _, err = conn.Read(b); err != nil {
+		return nil, err
 	}
 	reader := bytes.NewReader(b)
 	var packet DNSPacket
 	if err := packet.FromBytes(reader); err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
-	data := (*packet.Answers)[0].Data
-	ip := make([]string, len(data))
-	for i, b := range data {
-		ip[i] = fmt.Sprint(int(b))
-	}
-	return strings.Join(ip, "."), nil
+	return &packet, nil
 }
+
