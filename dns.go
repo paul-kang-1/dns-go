@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 
@@ -47,7 +49,7 @@ type (
 const (
 	RecursionDesired = uint16(1 << 8)
 
-	TypeA = 1
+	TypeA  = 1
 	TypeNS = 2
 
 	ClassIn = 1
@@ -157,11 +159,20 @@ func (dr *DNSRecord) FromBytes(reader *bytes.Reader) error {
 	dr.Type = binary.BigEndian.Uint16(data)
 	dr.Class = binary.BigEndian.Uint16(data[2:])
 	dr.TTL = binary.BigEndian.Uint32(data[4:])
-	// rdlength and data field
 	readLen := binary.BigEndian.Uint16(data[8:])
-	dr.Data = make([]byte, readLen)
-	if _, err := io.ReadFull(reader, dr.Data); err != nil {
-		return err
+	// Record type-specific parsing
+	switch dr.Type {
+	case TypeNS:
+		domainName, err := DecodeDomainName(reader)
+		if err != nil {
+			return err
+		}
+		dr.Data = []byte(domainName)
+	default:
+		dr.Data = make([]byte, readLen)
+		if _, err := io.ReadFull(reader, dr.Data); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -200,7 +211,12 @@ func DecodeDomainName(reader *bytes.Reader) (string, error) {
 	}
 	for length != 0 {
 		if length&0b1100_0000 != 0 {
-			return DecodeDomainNameCompressed(length, reader)
+			part, err := DecodeDomainNameCompressed(length, reader)
+			if err != nil {
+				return "", err
+			}
+			res = append(res, part)
+			break
 		}
 		bt := make([]byte, length)
 		if _, err := io.ReadFull(reader, bt); err != nil {
@@ -281,19 +297,22 @@ func SendQuery(ipAddr string, domainName string, recordType int) (*DNSPacket, er
 		return nil, err
 	}
 	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{
-		IP: net.ParseIP(ipAddr),
+		IP:   net.ParseIP(ipAddr),
 		Port: 53,
 	})
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
 	if _, err = conn.Write(query); err != nil {
+		_ = conn.Close() // Write error takes precedence
 		return nil, err
 	}
 
 	b := make([]byte, 1024)
 	if _, err = conn.Read(b); err != nil {
+		return nil, err
+	}
+	if err = conn.Close(); err != nil {
 		return nil, err
 	}
 	reader := bytes.NewReader(b)
@@ -304,3 +323,47 @@ func SendQuery(ipAddr string, domainName string, recordType int) (*DNSPacket, er
 	return &packet, nil
 }
 
+func getIPFromRecords(records *[]DNSRecord) string {
+	for _, answer := range *records {
+		if answer.Type == TypeA {
+			data := answer.Data
+			return net.IPv4(data[0], data[1], data[2], data[3]).String()
+		}
+	}
+	return ""
+}
+
+func getNameServer(packet *DNSPacket) string {
+	for _, authority := range *packet.Authorities {
+		if authority.Type == TypeNS {
+			return string(authority.Data)
+		}
+	}
+	return ""
+}
+
+func Resolve(domainName string, recordType int) (string, error) {
+	nameServer := "198.41.0.4"
+	for {
+		fmt.Printf("Querying %s for %s\n", nameServer, domainName)
+		resp, err := SendQuery(nameServer, domainName, recordType)
+		if err != nil {
+			return "", err
+		}
+		if ip := getIPFromRecords(resp.Answers); ip != "" {
+			return ip, nil
+		}
+		if ip := getIPFromRecords(resp.Additionals); ip != "" {
+			nameServer = ip
+			continue
+		}
+		if nsDomain := getNameServer(resp); nsDomain != "" {
+			nameServer, err = Resolve(nsDomain, TypeA)
+			if err != nil {
+				return "", err
+			}
+			continue
+		}
+		return "", errors.New("failed to extract IP information")
+	}
+}
