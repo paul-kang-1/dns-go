@@ -1,4 +1,4 @@
-package main
+package dns
 
 import (
 	"bytes"
@@ -342,8 +342,7 @@ func getNameServer(packet *DNSPacket) string {
 	return ""
 }
 
-func Resolve(domainName string, recordType int) (string, error) {
-	nameServer := "198.41.0.4"
+func Resolve(nameServer, domainName string, recordType int) (string, error) {
 	for {
 		fmt.Printf("Querying %s for %s\n", nameServer, domainName)
 		resp, err := SendQuery(nameServer, domainName, recordType)
@@ -358,7 +357,7 @@ func Resolve(domainName string, recordType int) (string, error) {
 			continue
 		}
 		if nsDomain := getNameServer(resp); nsDomain != "" {
-			nameServer, err = Resolve(nsDomain, TypeA)
+			nameServer, err = Resolve(nameServer, nsDomain, TypeA)
 			if err != nil {
 				return "", err
 			}
