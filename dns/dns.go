@@ -19,9 +19,12 @@ type (
 	}
 
 	DNSHeader struct {
-		Id                                                       uint16
-		Flags                                                    uint16
-		NumQuestions, NumAnswers, NumAuthorities, NumAdditionals uint16
+		Id             uint16
+		Flags          uint16
+		NumQuestions   uint16
+		NumAnswers     uint16
+		NumAuthorities uint16
+		NumAdditionals uint16
 	}
 
 	DNSQuestion struct {
