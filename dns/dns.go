@@ -7,17 +7,20 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 
 	"math/rand"
 	"strings"
 )
 
 type (
+	// DNS is a generic interface for DNS-related structs.
 	DNS[P any] interface {
 		FromBytes(reader *bytes.Reader) error
 		*P
 	}
 
+	// DNSHeader represents the header of a DNS packet.
 	DNSHeader struct {
 		Id             uint16
 		Flags          uint16
@@ -27,12 +30,14 @@ type (
 		NumAdditionals uint16
 	}
 
+	// DNSQuestion represents a question in a DNS packet.
 	DNSQuestion struct {
 		Name  []byte
 		Type  uint16
 		Class uint16
 	}
 
+	// DNSRecord represents a record in a DNS packet.
 	DNSRecord struct {
 		Name        []byte
 		Data        []byte
@@ -40,6 +45,7 @@ type (
 		TTL         uint32
 	}
 
+	// DNSPacket represents a DNS packet.
 	DNSPacket struct {
 		Header      *DNSHeader
 		Questions   *[]DNSQuestion
@@ -271,6 +277,7 @@ func DecodeDomainNameCompressed(length byte, reader *bytes.Reader) (string, erro
 	return res, nil
 }
 
+// NewQuery returns a DNS query packet for the given domain name and record type.
 func NewQuery(domainName string, recordType uint16) ([]byte, error) {
 	var err error
 	name, err := EncodeDomainName(domainName)
@@ -294,6 +301,7 @@ func NewQuery(domainName string, recordType uint16) ([]byte, error) {
 	return payload.Bytes(), nil
 }
 
+// SendQuery sends a DNS query to the given IP address for the given domain name
 func SendQuery(ipAddr string, domainName string, recordType int) (*DNSPacket, error) {
 	query, err := NewQuery(domainName, uint16(recordType))
 	if err != nil {
@@ -345,6 +353,7 @@ func getNameServer(packet *DNSPacket) string {
 	return ""
 }
 
+// Resolve returns the IP address of the given domain name.
 func Resolve(nameServer, domainName string, recordType int) (string, error) {
 	for {
 		fmt.Printf("Querying %s for %s\n", nameServer, domainName)
@@ -368,4 +377,22 @@ func Resolve(nameServer, domainName string, recordType int) (string, error) {
 		}
 		return "", errors.New("failed to extract IP information")
 	}
+}
+
+func ResolveBatch(nameServer string, domainNames []string, recordType int) ([]string, error) {
+	wg := sync.WaitGroup{}
+	result := make([]string, len(domainNames))
+	for i, domainName := range domainNames {
+		wg.Add(1)
+		go func(i int, domainName string) {
+			ip, err := Resolve(nameServer, domainName, recordType)
+			if err != nil {
+				result[i] = err.Error()
+			} else {
+				result[i] = ip
+			}
+			wg.Done()
+		}(i, domainName)
+	}
+	return result, nil
 }

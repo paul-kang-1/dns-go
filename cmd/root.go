@@ -12,11 +12,13 @@ import (
 )
 
 var nameServer string
+var batchFileName string
 
 var rootCmd = &cobra.Command{
 	Use:   "dns-go",
 	Short: "A minimal tool for querying DNS name servers",
 	Args: func(cmd *cobra.Command, args []string) error {
+		// TODO: add branching for batch filing
 		if len(args) != 1 {
 			return errors.New("requires exactly one arg: domain name")
 		}
@@ -53,5 +55,6 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&nameServer, "server", "198.41.0.4", "Name or IP address of the name server to query")
+	rootCmd.PersistentFlags().StringVar(&batchFileName, "file", "", "A file containing a newline-separated list of domain names to query")
 }
 
