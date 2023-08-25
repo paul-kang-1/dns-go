@@ -394,5 +394,6 @@ func ResolveBatch(nameServer string, domainNames []string, recordType int) ([]st
 			wg.Done()
 		}(i, domainName)
 	}
+	wg.Wait()
 	return result, nil
 }

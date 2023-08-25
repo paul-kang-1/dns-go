@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/paul-kang-1/dns-go/dns"
@@ -18,28 +20,48 @@ var rootCmd = &cobra.Command{
 	Use:   "dns-go",
 	Short: "A minimal tool for querying DNS name servers",
 	Args: func(cmd *cobra.Command, args []string) error {
-		// TODO: add branching for batch filing
-		if len(args) != 1 {
-			return errors.New("requires exactly one arg: domain name")
+		var err error
+		if len(args) > 1 || (len(args) == 0 && batchFileName == "") {
+			err = errors.New("either a target domain name or a filename should be supplied")
+		} else if len(args) == 1 && batchFileName != "" {
+			err = errors.New("only one of target domain name or filename should be supplied")
+		} else if len(args) == 1 {
+			_, err = url.Parse(args[0])
+		} else if batchFileName != "" {
+			_, err = os.Stat(batchFileName)
 		}
-		_, err := url.Parse(args[0])
-		if err != nil {
-			return errors.New("invalid url format: domain name")
-		}
-		return nil
+		return err
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		done := make(chan struct{}, 1)
-		go func() {
-			ip, err := dns.Resolve(nameServer, args[0], dns.TypeA)
-			if err != nil {
-				log.Fatal(err)
-			}
-			fmt.Println(ip)
-			close(done)
-		}()
+		if batchFileName == "" {
+			go func() {
+				ip, err := dns.Resolve(nameServer, args[0], dns.TypeA)
+				if err != nil {
+					log.Fatal(err)
+				}
+				fmt.Println(ip)
+				close(done)
+			}()
+		} else {
+			go func() {
+				data, err := os.ReadFile(batchFileName)
+				if err != nil {
+					log.Fatal(err)
+				}
+				domainList := strings.Split(string(data), "\n")
+				ipList, err := dns.ResolveBatch(nameServer, domainList, dns.TypeA)
+				if err != nil {
+					log.Fatal(err)
+				}
+				for i, ip := range ipList {
+					fmt.Printf("Retrieved IP for %s: %s\n", domainList[i], ip)
+				}
+				close(done)
+			}()
+		}
 		select {
-		case <- time.After(3*time.Second):
+		case <-time.After(5 * time.Second):
 			log.Fatal(errors.New("DNS query timeout"))
 		case <-done:
 			return
@@ -57,4 +79,3 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&nameServer, "server", "198.41.0.4", "Name or IP address of the name server to query")
 	rootCmd.PersistentFlags().StringVar(&batchFileName, "file", "", "A file containing a newline-separated list of domain names to query")
 }
-
